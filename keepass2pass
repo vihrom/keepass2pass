@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2013 Stefan Simroth <stefan.simroth@gmail.com>. All Rights Reserved.
+# Based on the script for KeepassX by Juhamatti Niemelä <iiska@iki.fi>.
+# This file is licensed under the GPLv2+. Please see LICENSE for more information.
+#
+# Contributor: Vitaliy Khatuntsev <vitalik.khatuntsev@gmail.com>
+# Description: Ported to Python 3, refactored duplicate handling, and added interactive CLI features.
+#
+# Usage:
+# ./keepass2pass.py -f export.xml                       (uses default XML root name)
+# ./keepass2pass.py -f export.xml -r "CustomRoot"       (places everything inside "CustomRoot/")
+# ./keepass2pass.py -f export.xml -r ""                 (flat structure, skips root folder completely)
+
+import getopt
+import sys
+from subprocess import run, PIPE
+from xml.etree import ElementTree
+
+DUPLICATE_STRATEGY = None
+
+
+def pass_import_entry(path, data):
+    """Import new password entry into the password-store via stdin"""
+    run(
+        ["pass", "insert", "--multiline", path],
+        input=data,
+        text=True,
+        stdout=PIPE,
+        stderr=PIPE,
+    )
+
+
+def get_value(elements, node_text):
+    for element in elements:
+        for child in element.findall("Key"):
+            if child.text == node_text:
+                val_node = element.find("Value")
+                return val_node.text if val_node is not None else ""
+    return ""
+
+
+def path_for(element, path=""):
+    """Generate path name from elements title and current path"""
+    if element.tag == "Entry":
+        title = get_value(element.findall("String"), "Title")
+    elif element.tag == "Group":
+        name_node = element.find("Name")
+        title = name_node.text if name_node is not None else ""
+    else:
+        title = ""
+
+    if path == "":
+        return title
+    else:
+        return "/".join([path, title])
+
+
+def password_data(element, path=""):
+    """Return password data and additional info if available from password entry element."""
+    data = ""
+    password = get_value(element.findall("String"), "Password")
+    if password is not None and password != "":
+        data = password + "\n"
+    else:
+        print(f"[WARN] No password: {path_for(element, path)}")
+
+    for field in ["UserName", "URL", "Notes"]:
+        value = get_value(element.findall("String"), field)
+        if value is not None and len(value) != 0:
+            data = f"{data}{field}: {value}\n"
+    return data
+
+
+def import_entry(entries, element, path=""):
+    """Extracts data and prompts the user on how to handle duplicates"""
+    global DUPLICATE_STRATEGY
+    base_path = path_for(element, path)
+    new_data = password_data(element, path)
+
+    if base_path in entries:
+        if DUPLICATE_STRATEGY in ["ma", "sa"]:
+            choice = "m" if DUPLICATE_STRATEGY == "ma" else "s"
+        else:
+            print(f"\n[!] Duplicate found for path: {base_path}")
+
+            while True:
+                choice = (
+                    input(
+                        "    Choose action - [m]erge, [s]plit, merge [ma]ll, split [sa]ll? (m/s/ma/sa): "
+                    )
+                    .strip()
+                    .lower()
+                )
+                if choice in ["m", "s", "ma", "sa"]:
+                    break
+                print("    Invalid input. Please enter 'm', 's', 'ma', or 'sa'.")
+
+            if choice in ["ma", "sa"]:
+                DUPLICATE_STRATEGY = choice
+                choice = "m" if choice == "ma" else "s"
+
+        if choice == "m":
+            print(f"[INFO] Merging duplicate into: {base_path}")
+            existing_data = entries[base_path]
+            entries[base_path] = f"{existing_data}---------\nPassword: {new_data}"
+        else:
+            element_path = base_path
+            counter = 1
+            while element_path in entries:
+                counter += 1
+                element_path = f"{base_path}_{counter}"
+            print(f"[INFO] Splitting duplicate into: {element_path}")
+            entries[element_path] = new_data
+    else:
+        entries[base_path] = new_data
+
+
+def import_group(entries, element, path="", npath=None):
+    """Import all entries and sub-groups from given group"""
+    if npath is None:
+        npath = path_for(element, path)
+    for group in element.findall("Group"):
+        import_group(entries, group, npath)
+    for entry in element.findall("Entry"):
+        import_entry(entries, entry, npath)
+
+
+def import_passwords(xml_file, root_path=None):
+    """Parse given Keepass2 XML file and import password groups from it"""
+    print(f"[>>>>] Importing passwords from file {xml_file}")
+    print(f"[INFO] Root path: {root_path}")
+    entries = dict()
+    with open(xml_file, encoding="utf-8") as xml:
+        text = xml.read()
+        xml_tree = ElementTree.XML(text)
+        root = xml_tree.find("Root")
+        if root is None:
+            print("[ERROR] Root path not found in XML")
+            return
+        root_group = root.find("Group")
+        if root_group is None:
+            print("[ERROR] Root Group not found in XML")
+            return
+
+        if root_path is None:
+            import_group(entries, root_group, "")
+        else:
+            import_group(entries, root_group, "", root_path)
+
+        password_count = 0
+        for path, data in sorted(entries.items()):
+            sys.stdout.write(f"[>>>>] Importing {path} ... ")
+            sys.stdout.flush()
+            pass_import_entry(path, data)
+            sys.stdout.write("OK\n")
+            password_count += 1
+
+        print(f"[ OK ] Done. Imported {password_count} passwords.")
+
+
+def usage():
+    """Print usage"""
+    print(f"Usage: {sys.argv[0]} -f XML_FILE")
+    print("Optional:")
+    print(
+        "  -r ROOT_PATH    Specify a custom root folder instead of the default XML root"
+    )
+
+
+def main(argv):
+    try:
+        opts, args = getopt.gnu_getopt(argv, "f:r:")
+        if args:
+            print(f"[ERROR] Unexpected arguments: {args}")
+            usage()
+            sys.exit(2)
+
+    except getopt.GetoptError as err:
+        print(str(err))
+        usage()
+        sys.exit(2)
+
+    xml_file = None
+    root_path = None
+
+    for opt, arg in opts:
+        if opt == "-f":
+            xml_file = arg
+        if opt == "-r":
+            root_path = arg
+
+    if xml_file is not None:
+        import_passwords(xml_file, root_path)
+    else:
+        usage()
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

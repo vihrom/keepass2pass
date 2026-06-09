@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<KeePassFile>
+    <Root>
+        <Group>
+            <Name>TestImport</Name>
+            
+            <Entry>
+                <String><Key>Title</Key><Value>SimpleAccount</Value></String>
+                <String><Key>UserName</Key><Value>test_user</Value></String>
+                <String><Key>Password</Key><Value>super_secret_123</Value></String>
+                <String><Key>URL</Key><Value>https://example.com</Value></String>
+            </Entry>
+            
+            <Entry>
+                <String><Key>Title</Key><Value>NoPasswordHere</Value></String>
+                <String><Key>UserName</Key><Value>forgotten_user</Value></String>
+                <String><Key>Password</Key><Value></Value></String>
+                <String><Key>Notes</Key><Value>I lost this password.</Value></String>
+            </Entry>
+
+            <Group>
+                <Name>Work</Name>
+                
+                <Entry>
+                    <String><Key>Title</Key><Value>ProdDatabase</Value></String>
+                    <String><Key>UserName</Key><Value>db_admin</Value></String>
+                    <String><Key>Password</Key><Value>Tr!ck$P@ssw0rd&amp;&lt;&gt;()</Value></String>
+                    <String><Key>Notes</Key><Value>Do not drop tables!</Value></String>
+                </Entry>
+                
+                <Entry>
+                    <String><Key>Title</Key><Value>ProdDatabase</Value></String>
+                    <String><Key>UserName</Key><Value>db_admin_old</Value></String>
+                    <String><Key>Password</Key><Value>old_password</Value></String>
+                    <String><Key>Notes</Key><Value>Old credentials</Value></String>
+                </Entry>
+            </Group>
+        </Group>
+    </Root>
+</KeePassFile>
