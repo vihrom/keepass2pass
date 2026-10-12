@@ -37,6 +37,24 @@ def error(message: str) -> None:
     print(f"[ERROR] {message}", file=sys.stderr)
 
 
+def sanitize_component(name: str) -> str:
+    """Make one path component safe for pass: no '/', no control characters,
+    never '.' or '..', never empty."""
+    name = CONTROL_CHARS.sub("_", name).strip()
+    if name in {".", ".."}:
+        name = "_"
+    return name or PLACEHOLDER
+
+
+def join_path(parent: str, child: str) -> str:
+    return f"{parent}/{child}" if parent else child
+
+
+def normalize_root(root: str) -> str:
+    """'a//b/' -> 'a/b'; '' stays '' (flat structure)."""
+    return "/".join(sanitize_component(part) for part in root.split("/") if part.strip())
+
+
 
 
 def pass_import_entry(path, data):
@@ -214,6 +232,16 @@ def main(argv):
     else:
         usage()
         sys.exit(2)
+def warn_case_collisions(paths: List[str]) -> None:
+    seen: Dict[str, str] = {}
+    for path in sorted(paths):
+        key = path.casefold()
+        if key in seen:
+            warn(f"paths differ only by case (collide on case-insensitive filesystems): "
+                 f"{seen[key]} / {path}")
+        seen[key] = path
+
+
 
 
 if __name__ == "__main__":
