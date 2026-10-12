@@ -14,8 +14,14 @@
 # ./keepass2pass.py -f export.xml -r ""                 (flat structure, skips root folder completely)
 from __future__ import annotations
 
+import argparse
+import os
+import re
+import shutil
 import sys
+from pathlib import Path
 from subprocess import PIPE, CalledProcessError, run
+from typing import Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
 SEPARATOR = "---------"
@@ -125,24 +131,6 @@ class Collector:
             warn(f"empty entry skipped: {path}")
             return
 
-
-def pass_import_entry(path, data):
-    """Import new password entry into the password-store via stdin"""
-    run(
-        ["pass", "insert", "--multiline", path],
-        input=data,
-        text=True,
-        stdout=PIPE,
-        stderr=PIPE,
-    )
-
-
-def import_entry(entries, element, path=""):
-    """Extracts data and prompts the user on how to handle duplicates"""
-    global DUPLICATE_STRATEGY
-    base_path = path_for(element, path)
-    new_data = password_data(element, path)
-
         if path not in self.entries:
             self.entries[path] = data
         elif self.resolve_duplicate(path) == "merge":
@@ -180,89 +168,54 @@ def import_entry(entries, element, path=""):
         return CHOICES[choice]
 
 
-    else:
-        entries[base_path] = new_data
-
-
-def import_group(entries, element, path="", npath=None):
-    """Import all entries and sub-groups from given group"""
-    if npath is None:
-        npath = path_for(element, path)
-    for group in element.findall("Group"):
-        import_group(entries, group, npath)
-    for entry in element.findall("Entry"):
-        import_entry(entries, entry, npath)
-
-
-def import_passwords(xml_file, root_path=None):
-    """Parse given Keepass2 XML file and import password groups from it"""
-    print(f"[>>>>] Importing passwords from file {xml_file}")
-    print(f"[INFO] Root path: {root_path}")
-    entries = dict()
-    with open(xml_file, encoding="utf-8") as xml:
-        text = xml.read()
-        xml_tree = ElementTree.XML(text)
-        root = xml_tree.find("Root")
-        if root is None:
-            print("[ERROR] Root path not found in XML")
-            return
-        root_group = root.find("Group")
-        if root_group is None:
-            print("[ERROR] Root Group not found in XML")
-            return
-
-        if root_path is None:
-            import_group(entries, root_group, "")
-        else:
-            import_group(entries, root_group, "", root_path)
-
-        password_count = 0
-        for path, data in sorted(entries.items()):
-            sys.stdout.write(f"[>>>>] Importing {path} ... ")
-            sys.stdout.flush()
-            pass_import_entry(path, data)
-            sys.stdout.write("OK\n")
-            password_count += 1
-
-        print(f"[ OK ] Done. Imported {password_count} passwords.")
-
-
-def usage():
-    """Print usage"""
-    print(f"Usage: {sys.argv[0]} -f XML_FILE")
-    print("Optional:")
-    print(
-        "  -r ROOT_PATH    Specify a custom root folder instead of the default XML root"
-    )
-
-
-def main(argv):
+def load_entries(xml_file: str, root_path: Optional[str], duplicates: str,
+                 include_bin: bool) -> Optional[Dict[str, str]]:
+    """Parse the KeePass2 XML export; returns None on a fatal error."""
+    print(f"[>>>>] Reading XML file: {xml_file}")
     try:
-        opts, args = getopt.gnu_getopt(argv, "f:r:")
-        if args:
-            print(f"[ERROR] Unexpected arguments: {args}")
-            usage()
-            sys.exit(2)
+        tree = ElementTree.parse(xml_file)
+    except (ElementTree.ParseError, OSError) as err:
+        error(f"cannot read {xml_file}: {err}")
+        return None
 
-    except getopt.GetoptError as err:
-        print(str(err))
-        usage()
-        sys.exit(2)
+    root = tree.getroot()
+    root_group = root.find("Root/Group")
+    if root_group is None:
+        error("<Root>/<Group> not found: not a KeePass2 XML export?")
+        return None
 
-    xml_file = None
-    root_path = None
-
-    for opt, arg in opts:
-        if opt == "-f":
-            xml_file = arg
-        if opt == "-r":
-            root_path = arg
-
-    if xml_file is not None:
-        import_passwords(xml_file, root_path)
+    if root_path is None:
+        start = sanitize_component(root_group.findtext("Name") or "")
     else:
-        usage()
-        sys.exit(2)
+        start = normalize_root(root_path)
+        info(f"root path: {start!r}" + (" (flat)" if not start else ""))
+
+    bin_uuid = None if include_bin else (root.findtext("Meta/RecycleBinUUID") or None)
+    collector = Collector(duplicates, bin_uuid)
+    collector.add_group(root_group, start)
+    return collector.entries
+
+
+def store_dir() -> Path:
+    return Path(os.environ.get("PASSWORD_STORE_DIR") or "~/.password-store").expanduser()
+
+
+def pass_insert(path: str, data: str) -> Optional[str]:
+    """Insert one entry via stdin. Returns None on success, else the reason.
+    '--' keeps a path like '-foo' from being parsed as an option; --force is
+    safe because existence is checked by the caller (pass would otherwise ask
+    for confirmation on stdin, which carries the secret)."""
+    try:
+        run(["pass", "insert", "--multiline", "--force", "--", path],
+            input=data, text=True, encoding="utf-8",
+            stdout=PIPE, stderr=PIPE, check=True)
+    except CalledProcessError as err:
+        return (err.stderr or "").strip() or f"pass exited with status {err.returncode}"
+    except OSError as err:
+        return str(err)
+    return None
+
+
 def warn_case_collisions(paths: List[str]) -> None:
     seen: Dict[str, str] = {}
     for path in sorted(paths):
@@ -273,7 +226,82 @@ def warn_case_collisions(paths: List[str]) -> None:
         seen[key] = path
 
 
+def import_entries(entries: Dict[str, str], overwrite: bool,
+                   dry_run: bool) -> Tuple[int, int, List[str]]:
+    """Returns (imported, skipped, failed paths)."""
+    store = store_dir()
+    imported = 0
+    skipped = 0
+    failed: List[str] = []
+
+    for path, data in sorted(entries.items()):
+        if not overwrite and (store / f"{path}.gpg").exists():
+            print(f"[SKIP] {path} (already exists; use --overwrite)")
+            skipped += 1
+        elif dry_run:
+            print(f"[DRY ] {path}")
+            imported += 1
+        else:
+            reason = pass_insert(path, data)
+            if reason is None:
+                print(f"[ OK ] {path}")
+                imported += 1
+            else:
+                print(f"[FAIL] {path}: {reason}", file=sys.stderr)
+                failed.append(path)
+    return imported, skipped, failed
+
+
+def run_import(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        if shutil.which("pass") is None:
+            error("'pass' was not found in PATH")
+            return 1
+        if not (store_dir() / ".gpg-id").exists():
+            error(f"password store is not initialised ({store_dir() / '.gpg-id'} missing); "
+                  "run: pass init <gpg-id>")
+            return 1
+
+    entries = load_entries(args.file, args.root, args.duplicates, args.include_recycle_bin)
+    if entries is None:
+        return 1
+    if not entries:
+        info("nothing to import")
+        return 0
+
+    warn_case_collisions(list(entries))
+    imported, skipped, failed = import_entries(entries, args.overwrite, args.dry_run)
+
+    verb = "would be imported" if args.dry_run else "imported"
+    print(f"[ OK ] Done: {imported} {verb}, {skipped} skipped, {len(failed)} failed "
+          f"(of {len(entries)}).")
+    if failed:
+        error("failed entries:\n  " + "\n  ".join(failed))
+        return 1
+    return 0
+
+
+def main() -> int:
+    sys.stdout.reconfigure(line_buffering=True)  # keep stdout/stderr in order # type: ignore
+    parser = argparse.ArgumentParser(
+        description="Import a KeePass2 XML export into pass (password-store)."
+    )
+    parser.add_argument("-f", "--file", required=True,
+                        help="path to the KeePass2 XML export")
+    parser.add_argument("-r", "--root", default=None,
+                        help="replace the KeePass root group name with this folder "
+                             "(use '' for a flat structure)")
+    parser.add_argument("--duplicates", choices=("ask", "merge", "split"), default="ask",
+                        help="what to do when two entries get the same path (default: ask)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="overwrite entries that already exist in the store "
+                             "(default: skip them)")
+    parser.add_argument("--include-recycle-bin", action="store_true",
+                        help="also import the KeePass Recycle Bin")
+    parser.add_argument("-n", "--dry-run", action="store_true",
+                        help="print what would be done, change nothing")
+    return run_import(parser.parse_args())
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main())
