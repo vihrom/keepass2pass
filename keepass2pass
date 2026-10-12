@@ -55,6 +55,75 @@ def normalize_root(root: str) -> str:
     return "/".join(sanitize_component(part) for part in root.split("/") if part.strip())
 
 
+def entry_fields(entry: ElementTree.Element) -> Dict[str, str]:
+    """All <String> key/value pairs of an entry (first occurrence wins)."""
+    fields: Dict[str, str] = {}
+    for node in entry.findall("String"):
+        key = node.findtext("Key")
+        if key and key not in fields:
+            fields[key] = node.findtext("Value") or ""
+    return fields
+
+
+def format_entry(entry: ElementTree.Element, fields: Dict[str, str], label: str) -> str:
+    """Render an entry in pass format. The first line is ALWAYS the password
+    (empty if there is none), so that `pass -c` never copies a metadata line.
+    Returns "" for entries with no content at all."""
+    password = fields.get("Password", "")
+    lines = [password]
+    for key in ("UserName", "URL"):
+        if fields.get(key):
+            lines.append(f"{key}: {fields[key]}")
+    for key, value in fields.items():
+        if key in HANDLED_KEYS or not value:
+            continue
+        # pass-otp looks for a bare otpauth:// line, so no "key: " prefix
+        lines.append(value if value.startswith("otpauth://") else f"{key}: {value}")
+    tags = entry.findtext("Tags")
+    if tags:
+        lines.append(f"Tags: {tags}")
+    if fields.get("Notes"):
+        lines.append(f"Notes: {fields['Notes']}")
+
+    if not any(lines):
+        return ""
+    if not password:
+        warn(f"no password: {label}")
+
+    for attachment in entry.findall("Binary"):
+        warn(f"attachment {attachment.findtext('Key')!r} is not imported: {label}")
+    if any("{REF:" in value for value in fields.values()):
+        warn(f"contains a KeePass field reference ({{REF:...}}), copied literally: {label}")
+
+    return "\n".join(lines) + "\n"
+
+
+class Collector:
+    """Walks the KeePass tree and collects `pass path -> entry text`."""
+
+    def __init__(self, duplicates: str, bin_uuid: Optional[str]) -> None:
+        self.entries: Dict[str, str] = {}
+        self.duplicates = duplicates  # "ask", "merge" or "split"
+        self.bin_uuid = bin_uuid
+
+    def add_group(self, group: ElementTree.Element, path: str) -> None:
+        """`path` is the final pass path of THIS group ("" = top level)."""
+        for sub in group.findall("Group"):
+            if self.bin_uuid and sub.findtext("UUID") == self.bin_uuid:
+                info(f"skipping Recycle Bin: {join_path(path, sanitize_component(sub.findtext('Name') or ''))}")
+                continue
+            name = sanitize_component(sub.findtext("Name") or "")
+            self.add_group(sub, join_path(path, name))
+        for entry in group.findall("Entry"):
+            self.add_entry(entry, path)
+
+    def add_entry(self, entry: ElementTree.Element, group_path: str) -> None:
+        fields = entry_fields(entry)
+        path = join_path(group_path, sanitize_component(fields.get("Title", "")))
+        data = format_entry(entry, fields, path)
+        if not data:
+            warn(f"empty entry skipped: {path}")
+            return
 
 
 def pass_import_entry(path, data):
@@ -66,47 +135,6 @@ def pass_import_entry(path, data):
         stdout=PIPE,
         stderr=PIPE,
     )
-
-
-def get_value(elements, node_text):
-    for element in elements:
-        for child in element.findall("Key"):
-            if child.text == node_text:
-                val_node = element.find("Value")
-                return val_node.text if val_node is not None else ""
-    return ""
-
-
-def path_for(element, path=""):
-    """Generate path name from elements title and current path"""
-    if element.tag == "Entry":
-        title = get_value(element.findall("String"), "Title")
-    elif element.tag == "Group":
-        name_node = element.find("Name")
-        title = name_node.text if name_node is not None else ""
-    else:
-        title = ""
-
-    if path == "":
-        return title
-    else:
-        return "/".join([path, title])
-
-
-def password_data(element, path=""):
-    """Return password data and additional info if available from password entry element."""
-    data = ""
-    password = get_value(element.findall("String"), "Password")
-    if password is not None and password != "":
-        data = password + "\n"
-    else:
-        print(f"[WARN] No password: {path_for(element, path)}")
-
-    for field in ["UserName", "URL", "Notes"]:
-        value = get_value(element.findall("String"), field)
-        if value is not None and len(value) != 0:
-            data = f"{data}{field}: {value}\n"
-    return data
 
 
 def import_entry(entries, element, path=""):
