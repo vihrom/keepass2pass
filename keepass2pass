@@ -143,40 +143,43 @@ def import_entry(entries, element, path=""):
     base_path = path_for(element, path)
     new_data = password_data(element, path)
 
-    if base_path in entries:
-        if DUPLICATE_STRATEGY in ["ma", "sa"]:
-            choice = "m" if DUPLICATE_STRATEGY == "ma" else "s"
+        if path not in self.entries:
+            self.entries[path] = data
+        elif self.resolve_duplicate(path) == "merge":
+            info(f"merging duplicate into: {path}")
+            self.entries[path] += f"{SEPARATOR}\nPassword: {data}"
         else:
-            print(f"\n[!] Duplicate found for path: {base_path}")
-
-            while True:
-                choice = (
-                    input(
-                        "    Choose action - [m]erge, [s]plit, merge [ma]ll, split [sa]ll? (m/s/ma/sa): "
-                    )
-                    .strip()
-                    .lower()
-                )
-                if choice in ["m", "s", "ma", "sa"]:
-                    break
-                print("    Invalid input. Please enter 'm', 's', 'ma', or 'sa'.")
-
-            if choice in ["ma", "sa"]:
-                DUPLICATE_STRATEGY = choice
-                choice = "m" if choice == "ma" else "s"
-
-        if choice == "m":
-            print(f"[INFO] Merging duplicate into: {base_path}")
-            existing_data = entries[base_path]
-            entries[base_path] = f"{existing_data}---------\nPassword: {new_data}"
-        else:
-            element_path = base_path
-            counter = 1
-            while element_path in entries:
+            counter = 2
+            while f"{path}_{counter}" in self.entries:
                 counter += 1
-                element_path = f"{base_path}_{counter}"
-            print(f"[INFO] Splitting duplicate into: {element_path}")
-            entries[element_path] = new_data
+            info(f"splitting duplicate into: {path}_{counter}")
+            self.entries[f"{path}_{counter}"] = data
+
+    def resolve_duplicate(self, path: str) -> str:
+        """Returns "merge" or "split"; may switch to a sticky strategy."""
+        if self.duplicates != "ask":
+            return self.duplicates
+
+        print(f"\n[!] Duplicate path detected: {path}")
+        while True:
+            try:
+                choice = input("    [m]erge, [s]plit, merge [ma]ll, split [sa]ll? ").strip().lower()
+            except EOFError:
+                error("cannot ask about duplicates without a terminal; use --duplicates merge|split")
+                sys.exit(1)
+            except KeyboardInterrupt:
+                print()
+                error("cancelled by user, nothing was imported")
+                sys.exit(1)
+            if choice in CHOICES:
+                break
+            print("    Invalid option. Please enter 'm', 's', 'ma' or 'sa'.")
+
+        if len(choice) == 2:
+            self.duplicates = CHOICES[choice]
+        return CHOICES[choice]
+
+
     else:
         entries[base_path] = new_data
 
