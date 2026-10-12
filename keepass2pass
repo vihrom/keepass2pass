@@ -12,13 +12,31 @@
 # ./keepass2pass.py -f export.xml                       (uses default XML root name)
 # ./keepass2pass.py -f export.xml -r "CustomRoot"       (places everything inside "CustomRoot/")
 # ./keepass2pass.py -f export.xml -r ""                 (flat structure, skips root folder completely)
+from __future__ import annotations
 
-import getopt
 import sys
-from subprocess import run, PIPE
+from subprocess import PIPE, CalledProcessError, run
 from xml.etree import ElementTree
 
-DUPLICATE_STRATEGY = None
+SEPARATOR = "---------"
+PLACEHOLDER = "untitled"
+HANDLED_KEYS = ("Title", "Password", "UserName", "URL", "Notes")
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f/]")
+CHOICES = {"m": "merge", "s": "split", "ma": "merge", "sa": "split"}
+
+
+def info(message: str) -> None:
+    print(f"[INFO] {message}")
+
+
+def warn(message: str) -> None:
+    print(f"[WARN] {message}", file=sys.stderr)
+
+
+def error(message: str) -> None:
+    print(f"[ERROR] {message}", file=sys.stderr)
+
+
 
 
 def pass_import_entry(path, data):
