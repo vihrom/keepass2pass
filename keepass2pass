@@ -6,12 +6,18 @@
 # This file is licensed under the GPLv2+. Please see LICENSE for more information.
 #
 # Contributor: Vitaliy Khatuntsev <vitalik.khatuntsev@gmail.com>
-# Description: Ported to Python 3, refactored duplicate handling, and added interactive CLI features.
+# Description: Ported to Python 3, refactored duplicate handling, interactive
+#              CLI, safer imports (no silent overwrites, Recycle Bin skipped,
+#              custom fields/OTP kept, strict path sanitizing, exit codes).
 #
 # Usage:
-# ./keepass2pass.py -f export.xml                       (uses default XML root name)
-# ./keepass2pass.py -f export.xml -r "CustomRoot"       (places everything inside "CustomRoot/")
-# ./keepass2pass.py -f export.xml -r ""                 (flat structure, skips root folder completely)
+#   ./keepass2pass.py -f export.xml                  (keep KeePass root group name)
+#   ./keepass2pass.py -f export.xml -r "CustomRoot"  (replace root group name)
+#   ./keepass2pass.py -f export.xml -r ""            (flat: no root folder at all)
+#   ./keepass2pass.py -f export.xml --dry-run        (show what would happen)
+#
+# Exit status: 0 success, 1 errors or failed inserts, 2 bad arguments.
+
 from __future__ import annotations
 
 import argparse
