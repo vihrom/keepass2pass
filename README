@@ -1,0 +1,124 @@
+keepass2pass
+============
+A Python script to import KeePass2 XML databases into the `pass` password
+store.
+
+
+Requirements
+------------
+* Python 3.8 or newer (standard library only)
+* `pass` installed and initialised (`pass init <gpg-id>`), with a working
+  `gpg` setup
+
+
+Security note
+-------------
+The XML export contains ALL your passwords in plain text. Create it on a
+RAM-backed filesystem if you can (e.g. `/dev/shm`) and delete it right after
+the import. `shred` is not reliable on SSDs and journaling filesystems.
+
+Passwords are handed to `pass` through stdin, never on the command line.
+
+
+Usage
+-----
+Make the script executable:
+
+	chmod +x keepass2pass.py
+
+1. Default import (keeps the KeePass root group name as the top folder):
+
+	./keepass2pass.py -f export.xml
+
+2. Custom root folder (REPLACES the KeePass root group name):
+
+	./keepass2pass.py -f export.xml -r "foo"
+
+3. Flat structure (no root folder at all):
+
+	./keepass2pass.py -f export.xml -r ""
+
+4. Preview without touching the store:
+
+	./keepass2pass.py -f export.xml --dry-run
+
+Options:
+
+	-f, --file FILE         KeePass2 XML export (required)
+	-r, --root DIR          replace the root group name; "" = flat
+	    --duplicates MODE   ask (default), merge or split
+	    --overwrite         overwrite entries that already exist
+	    --include-recycle-bin
+	                        also import the KeePass Recycle Bin
+	-n, --dry-run           print what would be done, change nothing
+
+Exit status: 0 on success, 1 if anything failed (unreadable XML, missing or
+uninitialised `pass`, failed inserts), 2 on bad arguments.
+
+
+What is imported
+----------------
+Each entry becomes one `pass` file:
+
+	<password>
+	UserName: ...
+	URL: ...
+	<custom fields as "Key: value">
+	otpauth://...            (an `otp` field with an otpauth:// URI, kept bare
+	                          so that pass-otp can use it)
+	Tags: ...
+	Notes: ...
+
+* The first line is always the password, empty if the entry has none, so
+  `pass -c` never copies a metadata line.
+* The Recycle Bin is skipped unless `--include-recycle-bin` is given.
+* Entries with no content at all are skipped with a warning.
+* Titles are sanitised: `/` and control characters become `_`, `.` and `..`
+  become `_`, empty titles become `untitled`.
+
+
+What is NOT imported (a warning is printed for the first two):
+------------------------------------------------------------------
+
+* Attachments
+* `{REF:...}` field references are copied literally and will not resolve
+* Icons, colours, expiry dates and entry history
+
+
+Existing entries
+----------------
+Entries that already exist in the store are skipped. Pass `--overwrite` to
+replace them. This also makes it safe to re-run the import after a failure.
+The store location is taken from `PASSWORD_STORE_DIR` (default
+`~/.password-store`).
+
+
+Duplicate Handling
+------------------
+Two entries get the same path when they share group and title. With
+`--duplicates ask` the script prompts interactively (before anything is
+written, so Ctrl+C is safe):
+
+* m  -> Merge this specific duplicate into one file
+* s  -> Split this specific duplicate (adds _2, _3, etc.)
+* ma -> Merge ALL remaining duplicates automatically
+* sa -> Split ALL remaining duplicates automatically
+
+A merged file separates the entries with a `---------` line, and the later
+password is prefixed with `Password: `. Without a terminal use
+`--duplicates merge` or `--duplicates split`.
+
+
+Notes
+-----
+* If your store is a git repository, `pass` makes one commit per entry.
+* Paths that differ only by case (`Foo`, `foo`) are reported, because they
+  overwrite each other on case-insensitive filesystems.
+
+
+License
+-------
+GPLv2 or later, see LICENSE.
+
+Based on the original script by Stefan Simroth, which is in turn based on
+the KeepassX script by Juhamatti Niemelä.
