@@ -46,11 +46,10 @@ Options:
 
 	-f, --file FILE         KeePass2 XML export (required)
 	-r, --root DIR          replace the root group name; "" = flat
-	    --duplicates MODE   ask (default), merge or split
-	    --overwrite         overwrite entries that already exist
-	    --include-recycle-bin
-	                        also import the KeePass Recycle Bin
 	-n, --dry-run           print what would be done, change nothing
+	--duplicates MODE       ask (default), merge or split
+	--overwrite             overwrite entries that already exist
+	--include-recycle-bin   also import the KeePass Recycle Bin
 
 Exit status: 0 on success, 1 if anything failed (unreadable XML, missing or
 uninitialised `pass`, failed inserts), 2 on bad arguments.
@@ -78,8 +77,7 @@ Each entry becomes one `pass` file:
 
 
 What is NOT imported (a warning is printed for the first two):
-------------------------------------------------------------------
-
+--------------------------------------------------------------
 * Attachments
 * `{REF:...}` field references are copied literally and will not resolve
 * Icons, colours, expiry dates and entry history
